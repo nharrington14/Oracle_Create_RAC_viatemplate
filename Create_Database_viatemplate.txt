@@ -1,0 +1,536 @@
+Definitions:
+	Old - source or originating database
+	New - destination database
+
+----------------------------------------------------------------------------
+PREPARATION - Most performed in the Old Database
+----------------------------------------------------------------------------
+DATABASE LEVEL:
+	1) Run preparation_script.sql. 
+		It will do the following:
+			
+		A) get_roles on Old via script step1_get_roles.sql
+			
+			SET PAGESIZE 10000;
+			SET VERIFY OFF;
+			SET term OFF;
+			SET FEEDBACK OFF;
+
+			exec dbms_metadata.set_transform_param(dbms_metadata.session_transform,'SQLTERMINATOR',TRUE);
+	
+			select dbms_metadata.get_ddl('ROLE' , role) 
+			from dba_roles
+			where role not in ('ADM_PARALLEL_EXECUTE_TASK'
+			,'APEX_ADMINISTRATOR_ROLE'
+			,'AQ_ADMINISTRATOR_ROLE'
+			,'AQ_USER_ROLE'
+			,'AUTHENTICATEDUSER'
+			,'CAPI_USER_ROLE'
+			,'CONNECT'
+			,'CSW_USR_ROLE'
+			,'CTXAPP'
+			,'CWM_USER'
+			,'DATAPUMP_EXP_FULL_DATABASE'
+			,'DATAPUMP_IMP_FULL_DATABASE'
+			,'DBA'
+			,'DBFS_ROLE'
+			,'DELETE_CATALOG_ROLE'
+			,'EJBCLIENT'
+			,'EXECUTE_CATALOG_ROLE'
+			,'EXP_FULL_DATABASE'
+			,'GATHER_SYSTEM_STATISTICS'
+			,'GLOBAL_AQ_USER_ROLE'
+			,'HS_ADMIN_EXECUTE_ROLE'
+			,'HS_ADMIN_ROLE'
+			,'HS_ADMIN_SELECT_ROLE'
+			,'IMP_FULL_DATABASE'
+			,'JAVADEBUGPRIV'
+			,'JAVAIDPRIV'
+			,'JAVASYSPRIV'
+			,'JAVAUSERPRIV'
+			,'JAVA_ADMIN'
+			,'JAVA_DEPLOY'
+			,'JMXSERVER'
+			,'LBAC_DBA'
+			,'LOGSTDBY_ADMINISTRATOR'
+			,'MGMT_USER'
+			,'OEM_ADVISOR'	
+			,'OEM_MONITOR'
+			,'OLAPI_TRACE_USER'
+			,'OLAP_DBA'
+			,'OLAP_USER'
+			,'OLAP_XS_ADMIN'
+			,'ORDADMIN'
+			,'OWB$CLIENT'
+			,'OWB_DESIGNCENTER_VIEW'
+			,'OWB_USER'
+			,'PLUSTRACE'
+			,'RECOVERY_CATALOG_OWNER'
+			,'RESOURCE'
+			,'SCHEDULER_ADMIN'
+			,'SELECT_CATALOG_ROLE'
+			,'SNMPAGENT'
+			,'SPATIAL_CSW_ADMIN'
+			,'SPATIAL_WFS_ADMIN'		
+			,'WFS_USR_ROLE'
+			,'WM_ADMIN_ROLE'
+			,'XDBADMIN'
+			,'XDB_SET_INVOKER'
+			,'XDB_WEBSERVICES'
+			,'XDB_WEBSERVICES_OVER_HTTP'
+			,'XDB_WEBSERVICES_WITH_PUBLIC');
+
+		B) get_system_roles on Old database via script step2_get_system_roles.sql
+			
+			SET FEEDBACK OFF;
+			select 'grant ' || granted_role || ' to system;' from dba_role_privs where grantee = 'SYSTEM' order by 1;
+
+		C) Run get_directories on Old database via script step3_get_directories.sql
+			
+			SET FEEDBACK OFF;
+			select 'create directory ' || rpad(directory_name, 30, ' ') || ' as ' || q'<'>' || directory_path  || q'<'>' || ';' from dba_directories order by 1;
+
+		D) Run get_synonyms on Old database via script step4_get_synonyms.sql
+			
+			with q1 as 
+			(
+			select username 
+			from dba_users 
+			where default_tablespace NOT in ('SYSTEM' ,'SYSAUX')
+			and username not in	('SYS','SYSTEM','OUTLN','SCOTT','ADAMS','JONES','CLARK','BLAKE','HR','OE','SH',
+			'DEMO','ANONYMOUS','AURORA$ORB$UNAUTHENTICATED','AWR_STAGE','CSMIG','CTXSYS','DBSNMP','DIP','DMSYS','DSSYS',
+			'EXFSYS','LBACSYS','MDSYS','ORACLE_OCM','ORDPLUGINS','ORDSYS','PERFSTAT','TRACESVR','TSMSYS','XDB','APEX_PUBLIC_USER',
+			'FLOWS_30000','FLOWS_FILES','MDDATA','SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','XS$NULL','MGMT_VIEW','OLAPSYS',
+			'OWBSYS','SI_INFORMTN_SCHEMA','SYSMAN','WK_TEST','WKSYS','WKPROXY','WMSYS')
+			)
+			select 'create synonym ' || owner || '.' || synonym_name || ' for ' || table_owner || '.' || table_name || ';'
+			from dba_synonyms t1, q1
+			where t1.table_owner = q1.username
+			and t1.owner <> 'PUBLIC' union all 
+			select 'create public synonym '  || synonym_name || ' for ' || table_owner || '.' || table_name  || ';'
+			from dba_synonyms t1, q1
+			where t1.table_owner = q1.username
+			and t1.owner =  'PUBLIC';	
+
+		E)Run get_profiles on Old database via script step5_get_profiles.sql
+			
+			SET LONG 1000000;
+			SET LONGCHUNKSIZE 1000000;
+			SET LINESIZE 1000;
+			SET HEADING OFF PAGES 0 FEEDBACK OFF VERIFY OFF;
+
+			exec dbms_metadata.set_transform_param(dbms_metadata.session_transform,'SQLTERMINATOR',TRUE);
+
+			select  dbms_metadata.get_ddl('PROFILE' , profile) from (select distinct profile from dba_profiles) ;
+
+		F)Run get_privileges on Old database via script step6_get_privileges.sql
+
+			set trimspool on
+			with q1 as 
+			(
+			select  username 
+			from dba_users where default_tablespace NOT in ('SYSTEM' ,'SYSAUX')
+			and username not in ('APEX_PUBLIC_USER',
+			'DIP',
+			'FLOWS_30000',
+			'FLOWS_FILES',
+			'MDDATA',
+			'ORACLE_OCM',
+			'SPATIAL_CSW_ADMIN_USR',
+			'SPATIAL_WFS_ADMIN_USR',
+			'XS$NULL')
+			order by username
+			)
+			select 'grant ' || granted_role || ' to ' || t1.grantee || ';'
+			from dba_role_privs t1, q1
+			where t1.grantee = q1.username
+			union all
+			select 'grant ' || privilege || ' to ' || t1.grantee || ';'
+			from dba_sys_privs t1, q1
+			where t1.grantee = q1.username
+			union all
+			select 'grant ' || privilege || ' on ' || owner || '.' || table_name || ' to ' || t1.grantee || ';'
+			from dba_tab_privs t1, q1
+			where t1.grantee = q1.username;
+
+	2) Identify db links by connecting via SQL Developer
+	
+		select * from dba_db_links;
+
+	3) Check files
+
+		Run step7_database_check.sql against the Old database which contains the following checks:
+			
+		A) Datafiles
+			
+			select name from v$datafile order by 1;
+
+		B) Controlfiles
+			
+			select name from v$controlfile order by 1;
+
+		C) Logfiles
+			
+			select member from v$logfile order by 1;
+
+		D) Tempfiles
+			
+			select name from v$tempfile;
+
+		E) Spfile
+			
+			show parameter spfile
+
+		F) Check for invalid objects
+			
+			set linesize 300
+        		set pages 1000
+        		column owner format a20
+		    	column object_name format a30
+		    	column object_type format a25
+    	    		column status format a10
+			 
+			select owner, object_type, object_name, status from all_objects where status = 'INVALID' order by 1, 2, 3;
+
+		G) Get object count
+		
+			with q1 as 
+			(
+				select  username 
+				from	dba_users 
+				where	default_tablespace NOT in ('SYSTEM' ,'SYSAUX')
+				and	username not in ('APEX_PUBLIC_USER',
+					'DIP',
+					'FLOWS_30000',
+					'FLOWS_FILES',
+					'MDDATA',
+					'ORACLE_OCM',
+					'SPATIAL_CSW_ADMIN_USR',
+					'SPATIAL_WFS_ADMIN_USR',
+					'XS$NULL')
+				order by username
+			)
+			select t1.owner, count(*) from dba_objects t1, q1
+			where t1.owner = q1.username
+			group by t1.owner
+			order by 2, 1;
+			
+		H) Get full object breakdown by schema
+
+			select owner, count(*), object_type from dba_objects where owner not in('SYS','SYSTEM','OUTLN','SCOTT','ADAMS','JONES','CLARK','BLAKE','HR','OE','SH',
+            		'DEMO','ANONYMOUS','APPQOSSYS','AURORA$ORB$UNAUTHENTICATED','AWR_STAGE','CSMIG','CTXSYS','DBSNMP','DIP','DMSYS','DSSYS',
+	                'EXFSYS','LBACSYS','MDSYS','ORACLE_OCM','ORDPLUGINS','ORDSYS','PERFSTAT','TRACESVR','TSMSYS','XDB','APEX_PUBLIC_USER',
+	                'FLOWS_30000','FLOWS_FILES','MDDATA','SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','XS$NULL','MGMT_VIEW','OLAPSYS',
+        	        'OWBSYS','SI_INFORMTN_SCHEMA','SYSMAN','WK_TEST','WKSYS','WKPROXY','WMSYS') group by owner, object_type order by owner, object_type;
+
+		I) Check log setup
+			
+			select dbid,name,created,log_mode,force_logging from v$database;
+			
+		J) Check components
+			
+			col version for a15
+			col comp_name for a50
+			select comp_id, comp_name, version, status from dba_registry order by 1;
+			
+		K) Check domain
+	
+			show parameter db_domain
+
+		L) <Production> Check cluster
+			
+			show parameter cluster
+
+		M) Check undo
+
+			show parameter undo
+			
+		N) Check listener
+
+			show parameter listener
+
+		O) Check name
+			
+			show parameter name
+
+		P) Check case-sensitive settings
+			
+			show parameter sec_case_sensitive_logon
+
+		Q) Check audit file destination
+			
+			show parameter audit_file_dest
+				
+	4) Create directories on New Database server
+	
+		mkdir /exports/New_Database
+		mkdir /arch/New_Database
+		mkdir /rman/New_Database/rman_bkup
+
+-------------------------------------------------------------------------
+SHELL CREATION
+-------------------------------------------------------------------------
+	1) Create template from Old Database
+
+		dbca -silent -createTemplateFromDB -sourceDB Old_Database -sysDBAUserName sys -sysDBAPassword ****** -templateName Old_Database_DB -maintainFileLocations  true
+
+	2) Create Database utilizing template in new home
+
+		dbca -silent -createDatabase -templateName Old_Database_DB.dbt -gdbName New_Database -sid New_Database -sysPassword ****** -systemPassword ****** -emConfiguration NONE -dbsnmpPassword ****** -sysmanPassword ****** -storageType ASM -asmSysPassword ****** -diskGroupName DATA1 -characterSet AL32UTF8 -nationalCharacterSet AL16UTF16  -oratabLocation /etc/oratab
+	
+	3) When using a template to create the database it may be necessary to recreate spfile. Go to asm and query location of spfile. Does the name of the spfile make sense?
+
+		asmcmd -p
+		cd DATA1/New_Database
+		ls -l
+		
+		If the spfile name is wrong:
+				
+		A) Set oracle sid to New Database and connect via sqlplus			
+
+		B) Create pfile
+
+			create pfile='/oracle/orabase/admin/common/pfile_New_Database.txt' from spfile;
+
+		C) Create spfile
+
+			create spfile='+DATA1/New_Database/spfileNew_Database.ora' from pfile='/oracle/orabase/admin/common/pfile_New_Database.txt';
+
+		D) Shutdown Immediate
+			
+		E) Exit sqlplus and issue the following command
+
+			echo "spfile='+DATA1/New_Database/spfileNew_Database.ora'" > $ORACLE_HOME/dbs/initNew_Database.ora
+			
+		F) Startup the database
+		
+
+	4) Check the recovery parameter
+
+		show parameter recovery
+
+-------------------------------------------------------------------------
+MIGRATION
+-------------------------------------------------------------------------
+EXPORT:
+	1) Set parameter file as on production server, if it hasn't been set and run (estimated run time < 2 min):
+
+		DIRECTORY=HAVI_DP_EXPORTS_DIR
+		PARALLEL=4
+		FULL=Y
+		CONTENT=ALL
+		LOGFILE=expdp_qapilot_full.log
+		DUMPFILE=expdp_full_qapilot_%U.dmp
+		JOB_NAME=expdp_qapilot_full
+			
+	2) Copy export file(s) if necessary to New Database location (estimated run time < 20 min)
+
+		 scp -p expdp_full_prdpilot_0[1-#].dmp <New_Database_location>:/exports/New_Database/. 
+		
+IMPORT:
+	1) Create directory for importing. Review and run get_directories_old on New Database to create directories.
+
+	2) Verify SID
+
+		echo $ORACLE_SID
+
+	3) Alter database into noarchivelog mode:
+
+		A) Stop database
+
+			shutdown immediate;
+					
+		B) Startup database in mount mode
+
+			startup mount;
+			
+		C) Alter database to noarchivelog mode
+
+			alter database noarchivelog;
+
+	4) Set parameter file as on New Database server and import the file:
+	
+		directory=HAVI_DP_EXPORTS_DIR
+		job_name=impdp_duspltj_full
+		cluster=N
+		content=all
+		parallel=4
+		logfile=impdp_prdpilot_full.log
+		dumpfile=expdp_full_prdpilot_%U.dmp
+		TABLE_EXISTS_ACTION=SKIP
+		EXCLUDE=SCHEMA:"IN(select * from all_users where username not in('SYS','SYSTEM','OUTLN','SCOTT','ADAMS','JONES','CLARK','BLAKE','HR','OE','SH',
+                'DEMO','ANONYMOUS','APPQOSSYS','AURORA$ORB$UNAUTHENTICATED','AWR_STAGE','CSMIG','CTXSYS','DBSNMP','DIP','DMSYS','DSSYS',
+                'EXFSYS','LBACSYS','MDSYS','ORACLE_OCM','ORDPLUGINS','ORDSYS','PERFSTAT','TRACESVR','TSMSYS','XDB','APEX_PUBLIC_USER',
+                'FLOWS_30000','FLOWS_FILES','MDDATA','SPATIAL_CSW_ADMIN_USR','SPATIAL_WFS_ADMIN_USR','XS$NULL','MGMT_VIEW','OLAPSYS',
+                'OWBSYS','SI_INFORMTN_SCHEMA','SYSMAN','WK_TEST','WKSYS','WKPROXY','WMSYS') order by 1;)"
+
+-----------------------------------------------------------------------------
+POST-MIGRATION - All performed in New Database
+-----------------------------------------------------------------------------		
+Convert to RAC:
+	1) Review the current log configuration
+	
+		select bytes,GROUP#,THREAD#,STATUS from v$log;
+
+	2) Add additional logfiles for second thread
+
+		alter database add logfile thread 2 group n# ('+DATA1','+FRA1') size <bytes from step 1>;
+		alter database add logfile thread 2 group n+1# ('+DATA1','+FRA1') size <bytes from step 1>;
+
+	3) Enable second thread
+
+		alter database enable public thread 2;
+
+	4) Review the current undo configuration
+
+		select tablespace_name,maxbytes from dba_data_files;
+
+	5) Create an additional undo tablespace
+
+		create undo tablespace UNDOTBS2 datafile '+DATA1' size <same as 4>;
+
+	6) Rename undo to undo1
+
+		alter tablespace UNDOTBS rename to UNDOTBS1;
+
+	7) Shutdown the database.
+
+		shutdown immediate
+
+	8) Add entries in pfile to convert to RAC
+
+		*.cluster_database=true
+		*.remote_listener='<New_Database server>:1521'
+		New_Database1.instance_number=1
+		New_Database2.instance_number=2
+		New_Database1.thread=1
+		New_Database2.thread=2
+		New_Database1.undo_tablespace='UNDOTBS1'
+		New_Database2.undo_tablespace='UNDOTBS2'
+		*.service_names='New_Database'
+
+	9) Set oracle SID to New_Database<Instance# (depending on which node you are on)>
+
+		export ORACLE_SID = New_Database<Instance#>
+
+	10) Startup database with updated pfile
+
+		startup nomount pfile='/oracle/orabase/admin/common/pfile_New_Database.txt';		
+
+	11) Create spfile from pfile
+
+		create spfile='+DATA1/New_Database/spfileNew_Database.ora' from pfile='/oracle/orabase/admin/common/pfile_New_Database.txt';
+
+	12) Shutdown the database
+	
+		shutdown immediate
+			
+	13) Exit sqlplus and issue the following command
+
+		echo "spfile='+DATA1/New_Database/spfileNew_Database.ora'" > $ORACLE_HOME/dbs/initNew_Database.ora
+
+	14) Alter Database in archivelog mode:
+			
+		A) Non-Production
+			
+			i) Stop database
+			
+				shutdown immediate;
+				
+			ii) Startup database in mount mode
+			
+				startup mount;
+			
+			iii) Alter database to archivelog mode
+			
+				alter database archivelog;
+				
+		B) Production
+		
+			i) Shutdown immediate all database instances
+		
+				srvctl stop database -d New_Database
+				
+			ii) Startup database in mount mode
+			
+				srvctl start database -d New_Database -o mount
+			
+			iii) Enable archive logging
+		
+				sqlplus / as sysdba
+				sql> alter database archivelog;
+				sql> exit;
+					
+			iv) Stop database
+		
+				srvctl stop database -d New_Database
+					
+			v) Restart all database instances
+		
+				srvctl start database -d New_Database
+				
+			vi) Verify on both nodes
+	
+				New_Database1> archive log list;
+				New_Database1> alter system switch logfile;
+				New_Database2> archive log list;
+					
+	15) As SYS do the following:
+			
+		grant select, delete on aud$ to OPS$ORACLE;
+		alter procedure OPS$ORACLE.AUDIT_PROC compile;
+			
+			
+	16) Utilize scripts from preparation to confirm all is as it should be
+		
+		A) Run preparation_script.sql against the New Database
+	
+		B) Verify db links
+
+			select * from dba_db_links;
+
+		C) Run step7_database_check.sql against the New Database
+
+		D) Run the following in Old Database and run the output in New Database:
+			
+			select 'create or replace public synonym "' || object_NAME || '" for "' || owner || '"."' || object_NAME || '";' 
+	  		from DBA_objects do 
+			where owner = 'TMMGR' and object_type in ('TABLE', 'SEQUENCE', 'FUNCTION', 'PROCEDURE', 'PACKAGE', 'VIEW')
+			and not exists (select null from dba_SYNONYMS where owner = 'PUBLIC' and table_owner = 'TMMGR' and synonym_name = do.object_name);
+
+	17) RMAN configuration and test backup:
+		
+		A) Configure rman backup
+			
+			i) Non-RAC
+			
+				update - New_Database:/oracle/orabase/product/11.2.0.3:N:Y in $OC/oratabbkp 
+			ii) RAC
+			
+				update - New_Database:/oracle/orabase/product/11.2.0.3:N:Y in /etc/oratab
+	
+		B) Configure rman verify with Old Database:
+		
+			RMAN> connect target as SYSTEM
+			RMAN> CONFIGURE RETENTION POLICY TO REDUNDANCY 1;
+			CONFIGURE BACKUP OPTIMIZATION ON;
+			CONFIGURE DEFAULT DEVICE TYPE TO DISK;
+			CONFIGURE CONTROLFILE AUTOBACKUP ON;
+			CONFIGURE CONTROLFILE AUTOBACKUP FORMAT FOR DEVICE TYPE DISK TO '/rman/New_Database/rman_bkup/%F';
+			CONFIGURE DEVICE TYPE DISK BACKUP TYPE TO COMPRESSED BACKUPSET PARALLELISM 4;
+			CONFIGURE DATAFILE BACKUP COPIES FOR DEVICE TYPE DISK TO 1;
+			CONFIGURE ARCHIVELOG BACKUP COPIES FOR DEVICE TYPE DISK TO 1;
+			CONFIGURE CHANNEL DEVICE TYPE DISK FORMAT   '/rman/New_Database/rman_bkup/%U';
+			CONFIGURE MAXSETSIZE TO 50 G;
+			CONFIGURE ENCRYPTION FOR DATABASE OFF;
+			CONFIGURE ENCRYPTION ALGORITHM 'AES128';
+			CONFIGURE COMPRESSION ALGORITHM 'BASIC' AS OF RELEASE 'DEFAULT' OPTIMIZE FOR LOAD TRUE ; # default
+			CONFIGURE ARCHIVELOG DELETION POLICY TO NONE;
+			CONFIGURE SNAPSHOT CONTROLFILE NAME TO '/rman/New_Database/rman_bkup/snapcf_New_Database.f';
+			
+		C) Test RMAN backup:
+
+			RMAN> backup database plus archivelog delete input;
+
+	18) Update TNSNAMES in various locations
+
