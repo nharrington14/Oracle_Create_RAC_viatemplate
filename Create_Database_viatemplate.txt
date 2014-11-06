@@ -313,7 +313,7 @@ SHELL CREATION
 MIGRATION
 -------------------------------------------------------------------------
 EXPORT:
-	1) Set parameter file as on production server, if it hasn't been set and run (estimated run time < 2 min):
+	1) Set parameter file on production server, if it hasn't been set and run (estimated run time < 2 min):
 
 		DIRECTORY=HAVI_DP_EXPORTS_DIR
 		PARALLEL=4
@@ -328,11 +328,11 @@ EXPORT:
 		 scp -p expdp_full_prdpilot_0[1-#].dmp <New_Database_location>:/exports/New_Database/. 
 		
 IMPORT:
-	1) Create directory for importing. Review and run get_directories_old on New Database to create directories.
-
-	2) Verify SID
+	1) Verify SID
 
 		echo $ORACLE_SID
+
+	2) Create directory for importing. Review and run get_directories_old on New Database to create directories.
 
 	3) Alter database into noarchivelog mode:
 
